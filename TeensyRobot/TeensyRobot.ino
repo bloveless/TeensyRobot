@@ -1,4 +1,3 @@
-#include <IRremote.h>
 #include <Servo.h>
 #include "TrackSpeed.h"
 
@@ -35,10 +34,6 @@ int sampleSize = 0;
 int maxPercentage =   100;
 int turnPercentage =  70;
 
-int irPin =           12;
-IRrecv irrecv(irPin);
-decode_results irResults;
-
 void setup() {
   if(leftSide) {
     pinMode(enable12Pin, OUTPUT);
@@ -62,10 +57,8 @@ void setup() {
   pinMode(buttonPin, INPUT);
   digitalWrite(ledPin, HIGH);
   
-  irrecv.enableIRIn();
-  
   Serial.begin(9600);
-  Serial2.begin(9600);
+  Serial2.begin(1200); // Hardware supports up to 2400, but 1200 gives longer range
 }
 
 void loop() {
@@ -115,15 +108,7 @@ void runAuto() {
 }
 
 void runRemote() {
-  if (irrecv.decode(&irResults)) {
-    int uncombined_x = ((irResults.value / 1000) - 100);
-    int uncombined_y = ((irResults.value % 1000) - 100);
-    Serial.printf("X: %d - Y: %d\n", uncombined_x, uncombined_y);
-    TrackVal trackSpeed = calcTrackSpeed(uncombined_x, uncombined_y);
-    Serial.printf("Left Track: %d, Right Track: %d\n", trackSpeed.left, trackSpeed.right);
-    setTrackSpeed(trackSpeed);
-    irrecv.resume();
-  }
+  Serial.println(readUInt(false));
 }
 
 void setTrackSpeed(TrackVal curSpeed) {
@@ -351,5 +336,86 @@ void lowerArm() {
   }
 }
 */ 
+
+// Maurice Ribble 
+// 8-30-2009
+// http://www.glacialwanderer.com/hobbyrobotics
+// Used Arduino 0017
+// This does does some error checking to try to make sure the receiver on this one way RF 
+//  serial link doesn't repond to garbage
+
+#define NETWORK_SIG_SIZE 6
+
+#define VAL_SIZE         2
+#define CHECKSUM_SIZE    1
+#define PACKET_SIZE      (NETWORK_SIG_SIZE + VAL_SIZE + CHECKSUM_SIZE)
+
+// The network address byte and can be change if you want to run different devices in proximity to each other without interfearance
+#define NET_ADDR 5
+
+#define byte uint8_t
+const byte g_network_sig[NETWORK_SIG_SIZE] = {0x8F, 0xAA, NET_ADDR};  // Few bytes used to initiate a transfer
+
+// Sends an unsigned int over the RF network
+void writeUInt(unsigned int val)
+{
+  byte checksum = (val/256) ^ (val&0xFF);
+  Serial2.write(0xF0);  // This gets reciever in sync with transmitter
+  Serial2.write(g_network_sig, NETWORK_SIG_SIZE);
+  Serial2.write((byte*)&val, VAL_SIZE);
+  Serial2.write(checksum); //CHECKSUM_SIZE
+}
+
+// Receives an unsigned int over the RF network
+unsigned int readUInt(bool wait)
+{
+  int pos = 0;          // Position in the network signature
+  unsigned int val;     // Value of the unsigned int
+  byte c = 0;           // Current byte
+  
+  if((Serial2.available() < PACKET_SIZE) && (wait == false))
+  {
+    return 0xFFFF;
+  }
+  
+  while(pos < NETWORK_SIG_SIZE)
+  { 
+    while(Serial2.available() == 0); // Wait until something is avalible
+    c = Serial2.read();
+
+    if (c == g_network_sig[pos])
+    {
+      if (pos == NETWORK_SIG_SIZE-1)
+      {
+        byte checksum;
+
+        while(Serial2.available() < VAL_SIZE + CHECKSUM_SIZE); // Wait until something is avalible
+        val      =  Serial2.read();
+        val      += ((unsigned int)Serial2.read())*256;
+        checksum =  Serial2.read();
+        
+        if (checksum != ((val/256) ^ (val&0xFF)))
+        {
+          // Checksum failed
+          pos = -1;
+        }
+      }
+      ++pos;
+    }
+    else if (c == g_network_sig[0])
+    {
+      pos = 1;
+    }
+    else
+    {
+      pos = 0;
+      if (!wait)
+      {
+        return 0xFFFF;
+      }
+    }
+  }
+  return val;
+}
 
 /* vim: set tabstop=2 shiftwidth=2 expandtab: */
